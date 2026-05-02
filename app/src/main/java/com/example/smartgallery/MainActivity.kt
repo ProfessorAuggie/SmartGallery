@@ -14,6 +14,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -22,6 +25,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -717,65 +721,82 @@ private fun AlbumStrip(
     onAlbumSelected: (Long?) -> Unit,
     onShowTrash: (Boolean) -> Unit
 ) {
-    Column(
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = 12.dp)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp
     ) {
-        Text(
-            text = "Albums",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        )
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        Column(
+            modifier = Modifier.padding(vertical = 8.dp)
         ) {
-            item {
-                AlbumChip(
-                    title = "All Photos",
-                    count = albums.sumOf { it.photoCount },
-                    selected = selectedAlbumId == null,
-                    coverUri = albums.firstOrNull()?.coverImage?.uri,
-                    onClick = { 
-                        onAlbumSelected(null)
-                        onShowTrash(false)
-                    }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Albums",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = "${albums.size} folders${if (trashCount > 0) " • $trashCount in trash" else ""}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            items(albums, key = { it.bucketId }) { album ->
-                AlbumChip(
-                    title = album.name,
-                    count = album.photoCount,
-                    selected = selectedAlbumId == album.bucketId,
-                    coverUri = album.coverImage.uri,
-                    onClick = { 
-                        onAlbumSelected(album.bucketId)
-                        onShowTrash(false)
-                    }
-                )
-            }
-            item {
-                if (trashCount > 0) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                item {
                     AlbumChip(
-                        title = "Trash",
-                        count = trashCount,
-                        selected = false,
-                        coverUri = null,
-                        onClick = { 
+                        title = "All Photos",
+                        count = albums.sumOf { it.photoCount },
+                        selected = selectedAlbumId == null,
+                        coverUri = albums.firstOrNull()?.coverImage?.uri,
+                        onClick = {
                             onAlbumSelected(null)
-                            onShowTrash(true)
-                        },
-                        isTrash = true
+                            onShowTrash(false)
+                        }
                     )
+                }
+                items(albums, key = { it.bucketId }) { album ->
+                    AlbumChip(
+                        title = album.name,
+                        count = album.photoCount,
+                        selected = selectedAlbumId == album.bucketId,
+                        coverUri = album.coverImage.uri,
+                        onClick = {
+                            onAlbumSelected(album.bucketId)
+                            onShowTrash(false)
+                        }
+                    )
+                }
+                item {
+                    if (trashCount > 0) {
+                        AlbumChip(
+                            title = "Trash",
+                            count = trashCount,
+                            selected = false,
+                            coverUri = null,
+                            onClick = {
+                                onAlbumSelected(null)
+                                onShowTrash(true)
+                            },
+                            isTrash = true
+                        )
+                    }
                 }
             }
         }
     }
 }
-
-@Composable
-fun Dp.toPxFloat() = value
 
 @Composable
 private fun AlbumChip(
@@ -786,24 +807,46 @@ private fun AlbumChip(
     onClick: () -> Unit,
     isTrash: Boolean = false
 ) {
+    val targetContainerColor = when {
+        isTrash -> MaterialTheme.colorScheme.errorContainer
+        selected -> MaterialTheme.colorScheme.primaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val containerColor by animateColorAsState(targetValue = targetContainerColor, label = "albumContainer")
+    val contentColor by animateColorAsState(
+        targetValue = if (isTrash || selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+        label = "albumContent"
+    )
+    val elevation by animateDpAsState(
+        targetValue = if (selected) 10.dp else 2.dp,
+        label = "albumElevation"
+    )
+    val scale by animateFloatAsState(
+        targetValue = if (selected) 1.02f else 1f,
+        label = "albumScale"
+    )
+
     Card(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isTrash) {
-                MaterialTheme.colorScheme.errorContainer
-            } else if (selected) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant
-            }
+            containerColor = containerColor
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (selected) 8.dp else 2.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = elevation),
         modifier = Modifier
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .border(
+                width = if (selected) 1.5.dp else 1.dp,
+                color = if (isTrash) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(18.dp)
+            )
             .clickable(onClick = onClick)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             if (coverUri != null && !isTrash) {
@@ -835,14 +878,14 @@ private fun AlbumChip(
                 Text(
                     text = title,
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    color = contentColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = "$count photos",
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (selected) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = contentColor.copy(alpha = 0.82f)
                 )
             }
         }
