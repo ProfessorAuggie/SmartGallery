@@ -71,6 +71,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
@@ -105,6 +106,7 @@ private fun GalleryScreen() {
     }
 
     val favoriteStore = remember { FavoriteStore(context) }
+    val trashStore = remember { TrashStore(context) }
     var hasPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
@@ -114,11 +116,15 @@ private fun GalleryScreen() {
     var query by rememberSaveable { mutableStateOf("") }
     var sortMode by rememberSaveable { mutableStateOf(GallerySortMode.NEWEST) }
     var showFavoritesOnly by rememberSaveable { mutableStateOf(false) }
+    var showTrash by rememberSaveable { mutableStateOf(false) }
     var favoriteUris by remember { mutableStateOf(favoriteStore.loadFavorites()) }
+    var deletedUris by remember { mutableStateOf(trashStore.loadTrash().map { it.imageUri }.toSet()) }
     var sortMenuExpanded by remember { mutableStateOf(false) }
     var selectedViewerImages by remember { mutableStateOf<List<GalleryImage>?>(null) }
     var selectedViewerIndex by remember { mutableStateOf(0) }
     var selectedAlbumId by remember { mutableStateOf<Long?>(null) }
+    var multiSelectMode by remember { mutableStateOf(false) }
+    var selectedImages by remember { mutableStateOf(setOf<String>()) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -143,11 +149,17 @@ private fun GalleryScreen() {
         getAlbums(allImages)
     }
 
-    val filteredByAlbum = remember(allImages, selectedAlbumId) {
-        if (selectedAlbumId == null) {
-            allImages
+    val filteredByAlbum = remember(allImages, selectedAlbumId, deletedUris, showTrash) {
+        val activeImages = if (showTrash) {
+            allImages.filter { deletedUris.contains(it.uri.toString()) }
         } else {
-            allImages.filter { it.bucketId == selectedAlbumId }
+            allImages.filter { !deletedUris.contains(it.uri.toString()) }
+        }
+        
+        if (selectedAlbumId == null) {
+            activeImages
+        } else {
+            activeImages.filter { it.bucketId == selectedAlbumId }
         }
     }
 
@@ -179,6 +191,25 @@ private fun GalleryScreen() {
         }
         favoriteUris = updatedFavorites
         favoriteStore.saveFavorites(updatedFavorites)
+    }
+
+    val deleteImage: (GalleryImage) -> Unit = { image ->
+        deletedUris = deletedUris + image.uri.toString()
+        trashStore.addToTrash(image)
+    }
+
+    val restoreImage: (GalleryImage) -> Unit = { image ->
+        deletedUris = deletedUris - image.uri.toString()
+        trashStore.restoreFromTrash(image.uri.toString())
+    }
+
+    val deleteSelected: () -> Unit = {
+        selectedImages.forEach { uriString ->
+            allImages.find { it.uri.toString() == uriString }?.let { trashStore.addToTrash(it) }
+        }
+        deletedUris = deletedUris + selectedImages
+        selectedImages = setOf()
+        multiSelectMode = false
     }
 
     val openViewer: (GalleryImage) -> Unit = { image ->
@@ -296,13 +327,18 @@ private fun GalleryScreen() {
                                 favoriteUris = favoriteUris,
                                 onToggleFavorite = toggleFavorite,
                                 onImageClick = openViewer,
+                                onDeleteImage = deleteImage,
+                                onRestoreImage = restoreImage,
+                                showTrash = showTrash,
                                 modifier = Modifier.weight(1f)
                             )
 
                             AlbumStrip(
                                 albums = albums,
+                                trashCount = deletedUris.size,
                                 selectedAlbumId = selectedAlbumId,
-                                onAlbumSelected = { selectedAlbumId = it }
+                                onAlbumSelected = { selectedAlbumId = it },
+                                onShowTrash = { showTrash = it }
                             )
                         }
                     }
@@ -470,23 +506,26 @@ private fun GalleryGrid(
     favoriteUris: Set<String>,
     onToggleFavorite: (GalleryImage) -> Unit,
     onImageClick: (GalleryImage) -> Unit,
+    onDeleteImage: (GalleryImage) -> Unit,
+    onRestoreImage: (GalleryImage) -> Unit,
+    showTrash: Boolean,
     modifier: Modifier = Modifier
 ) {
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 118.dp),
-        contentPadding = PaddingValues(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        columns = GridCells.Adaptive(minSize = 160.dp),
+        contentPadding = PaddingValues(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = modifier.fillMaxSize()
     ) {
         items(images, key = { it.uri.toString() }) { image ->
             val isFavorite = favoriteUris.contains(image.uri.toString())
             Card(
-                shape = RoundedCornerShape(20.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = if (isFavorite) 7.dp else 4.dp),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = if (isFavorite) 8.dp else 4.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(1f)
+                    .height((image.aspectRatio * 180).dp.coerceIn(150.dp, 280.dp))
                     .clickable { onImageClick(image) }
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -503,37 +542,80 @@ private fun GalleryGrid(
                                 Brush.verticalGradient(
                                     colors = listOf(
                                         Color.Transparent,
-                                        Color.Black.copy(alpha = 0.35f)
-                                    )
+                                        Color.Transparent,
+                                        Color.Black.copy(alpha = 0.5f)
+                                    ),
+                                    startY = 100f
                                 )
                             )
                     )
-                    TextButton(
-                        onClick = { onToggleFavorite(image) },
+                    Row(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
-                            .padding(4.dp)
+                            .padding(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text(if (isFavorite) "♥" else "♡")
+                        TextButton(
+                            onClick = { onToggleFavorite(image) },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Text(if (isFavorite) "♥" else "♡", fontSize = 18.sp)
+                        }
+                        if (showTrash) {
+                            TextButton(
+                                onClick = { onRestoreImage(image) },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Text("↩", fontSize = 18.sp)
+                            }
+                        } else {
+                            TextButton(
+                                onClick = { onDeleteImage(image) },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Text("🗑", fontSize = 14.sp)
+                            }
+                        }
                     }
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomStart)
-                            .padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
                         Text(
                             text = image.displayName,
                             color = Color.White,
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            fontSize = 11.sp
                         )
-                        Text(
-                            text = if (isFavorite) "Favorited" else "Tap to open",
-                            color = Color.White.copy(alpha = 0.82f),
-                            style = MaterialTheme.typography.labelSmall
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = image.formattedDate,
+                                color = Color.White.copy(alpha = 0.75f),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 9.sp
+                            )
+                            Text(
+                                text = image.formattedSize,
+                                color = Color.White.copy(alpha = 0.75f),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 9.sp
+                            )
+                        }
+                        if (image.width > 0 && image.height > 0) {
+                            Text(
+                                text = "${image.width}×${image.height}",
+                                color = Color.White.copy(alpha = 0.65f),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 8.sp
+                            )
+                        }
                     }
                 }
             }
@@ -630,8 +712,10 @@ private fun FullScreenImageViewer(
 @Composable
 private fun AlbumStrip(
     albums: List<GalleryAlbum>,
+    trashCount: Int,
     selectedAlbumId: Long?,
-    onAlbumSelected: (Long?) -> Unit
+    onAlbumSelected: (Long?) -> Unit,
+    onShowTrash: (Boolean) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -653,7 +737,10 @@ private fun AlbumStrip(
                     count = albums.sumOf { it.photoCount },
                     selected = selectedAlbumId == null,
                     coverUri = albums.firstOrNull()?.coverImage?.uri,
-                    onClick = { onAlbumSelected(null) }
+                    onClick = { 
+                        onAlbumSelected(null)
+                        onShowTrash(false)
+                    }
                 )
             }
             items(albums, key = { it.bucketId }) { album ->
@@ -662,8 +749,26 @@ private fun AlbumStrip(
                     count = album.photoCount,
                     selected = selectedAlbumId == album.bucketId,
                     coverUri = album.coverImage.uri,
-                    onClick = { onAlbumSelected(album.bucketId) }
+                    onClick = { 
+                        onAlbumSelected(album.bucketId)
+                        onShowTrash(false)
+                    }
                 )
+            }
+            item {
+                if (trashCount > 0) {
+                    AlbumChip(
+                        title = "Trash",
+                        count = trashCount,
+                        selected = false,
+                        coverUri = null,
+                        onClick = { 
+                            onAlbumSelected(null)
+                            onShowTrash(true)
+                        },
+                        isTrash = true
+                    )
+                }
             }
         }
     }
@@ -678,12 +783,15 @@ private fun AlbumChip(
     count: Int,
     selected: Boolean,
     coverUri: android.net.Uri? = null,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    isTrash: Boolean = false
 ) {
     Card(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (selected) {
+            containerColor = if (isTrash) {
+                MaterialTheme.colorScheme.errorContainer
+            } else if (selected) {
                 MaterialTheme.colorScheme.primary
             } else {
                 MaterialTheme.colorScheme.surfaceVariant
@@ -698,7 +806,7 @@ private fun AlbumChip(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            if (coverUri != null) {
+            if (coverUri != null && !isTrash) {
                 AsyncImage(
                     model = coverUri,
                     contentDescription = "$title cover",
@@ -712,8 +820,13 @@ private fun AlbumChip(
                     modifier = Modifier
                         .size(56.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surface)
-                )
+                        .background(if (isTrash) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surface),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isTrash) {
+                        Text("🗑", fontSize = 24.sp)
+                    }
+                }
             }
 
             Column(
